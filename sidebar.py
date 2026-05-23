@@ -50,15 +50,24 @@ def _hide_console():
 
 # --- 自动配置依赖 ---
 def _ensure_deps():
+    deps = [
+        ("pyautogui", "pyautogui"),
+        ("pyperclip", "pyperclip"),
+        ("openai", "openai"),
+        ("pystray", "pystray"),
+        ("win32clipboard", "pywin32"),
+    ]
     missing = []
-    for mod in ("pyautogui", "pyperclip", "openai", "pystray", "pywin32"):
+    pip_names = []
+    for mod, pkg in deps:
         try:
             __import__(mod)
         except ImportError:
             missing.append(mod)
+            pip_names.append(pkg)
     if missing:
         print(f"⚠ 缺少 {missing} 模块，正在自动安装...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", *pip_names])
 
 def _ensure_extra_deps():
     missing = []
@@ -301,7 +310,7 @@ class Sidebar:
             pyperclip.copy(ai_reply)
             # 清空输入框并显示短暂提示
             self.entry_var.set("")
-            self._show_toast("✅ 已复制到剪贴板")
+            self._show_toast(f"✅ 已复制到剪贴板：{ai_reply}")
         except Exception as e:
             messagebox.showerror("AI 错误", f"调用AI接口出错:\n{e}")
 
