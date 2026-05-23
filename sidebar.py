@@ -47,7 +47,6 @@ def _hide_console():
         except Exception:
             pass
 
-_hide_console()
 
 # --- 自动配置依赖 ---
 def _ensure_deps():
@@ -58,7 +57,7 @@ def _ensure_deps():
         except ImportError:
             missing.append(mod)
     if missing:
-        self._show_toast(f"⚠ 缺少 {missing} 模块，正在自动安装...")
+        print(f"⚠ 缺少 {missing} 模块，正在自动安装...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
 
 def _ensure_extra_deps():
@@ -73,6 +72,8 @@ def _ensure_extra_deps():
 
 _ensure_deps()
 _ensure_extra_deps()
+
+_hide_console()
 import pyautogui
 import pyperclip
 import windnd
