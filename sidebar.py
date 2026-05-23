@@ -161,8 +161,10 @@ class Sidebar:
         self.root.geometry(f"{self.WIDTH_COLLAPSED}x{sh}+{x}+0")
 
         self.expanded = False
-        self._dropdown_open = False  # 标记下拉列表是否打开
-        self._drag_active = False    # 标记按钮拖动进行中
+        self._dropdown_open = False
+        self._drag_active = False
+        self._dialog_open = False
+        self._translating = False
 
         # ── 内容区 ──
         self.content = tk.Frame(self.root, bg="#2b2b2b")
@@ -253,8 +255,8 @@ class Sidebar:
             pass
 
     def _on_mousewheel(self, event):
-        # 下拉列表打开时，不处理主画布的滚动
-        if self._dropdown_open:
+        # 下拉列表或弹出框打开时，不处理主画布的滚动
+        if self._dropdown_open or self._dialog_open:
             return
         if event.num == 4:
             self.canvas.yview_scroll(-3, "units")
@@ -265,6 +267,10 @@ class Sidebar:
 
     # --- 翻译 ---
     def _do_ai_chat(self):
+        # 防重复请求
+        if self._translating:
+            return
+
         user_input = self.entry_var.get().strip()
         if not user_input:
             return
@@ -292,27 +298,78 @@ class Sidebar:
             {"role": "user", "content": user_input},
         ]
 
-        try:
-            client = OpenAI(api_key=api_key, base_url=base_url)
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_completion_tokens=1024,
-                temperature=0.3,
-                top_p=0.95,
-                stream=False,
-                stop=None,
-                frequency_penalty=0,
-                presence_penalty=0,
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-            ai_reply = completion.choices[0].message.content
-            pyperclip.copy(ai_reply)
-            # 清空输入框并显示短暂提示
-            self.entry_var.set("")
-            self._show_toast(f"✅ 已复制到剪贴板：{ai_reply}")
-        except Exception as e:
-            messagebox.showerror("AI 错误", f"调用AI接口出错:\n{e}")
+
+        self._translating = True
+        self._lock_translate_ui(True)
+        self._show_loading_toast("⏳ 正在翻译中，请稍候...")
+        def _api_worker():
+            try:
+                client = OpenAI(api_key=api_key, base_url=base_url)
+                completion = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_completion_tokens=1024,
+                    temperature=0.3,
+                    top_p=0.95,
+                    stream=False,
+                    stop=None,
+                    frequency_penalty=0,
+                    presence_penalty=0,
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
+                ai_reply = completion.choices[0].message.content
+                self.root.after(0, lambda: self._on_translate_done(ai_reply))
+            except Exception as e:
+                self.root.after(0, lambda: self._on_translate_error(str(e)))
+
+        threading.Thread(target=_api_worker, daemon=True).start()
+
+    def _lock_translate_ui(self, locked):
+        state = "disabled" if locked else "normal"
+        self.entry.configure(state=state)
+        for child in self.btn_frame.winfo_children():
+            try:
+                if child.cget("text") == "AI 翻译":
+                    child.configure(state=state)
+                    break
+            except tk.TclError:
+                continue
+
+    def _show_loading_toast(self, msg):
+        if hasattr(self, '_loading_toast') and self._loading_toast and self._loading_toast.winfo_exists():
+            self._loading_toast.destroy()
+
+        toast = tk.Toplevel(self.root)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        toast.configure(bg="#f0a030")
+        lbl = tk.Label(toast, text=msg, font=("Microsoft YaHei", 11),
+                       bg="#f0a030", fg="white", padx=16, pady=8)
+        lbl.pack()
+        toast.update_idletasks()
+        tw = toast.winfo_width()
+        sw = self.root.winfo_screenwidth()
+        toast.geometry(f"+{(sw - tw) // 2}+80")
+        self._loading_toast = toast
+
+    def _dismiss_loading_toast(self):
+        if hasattr(self, '_loading_toast') and self._loading_toast and self._loading_toast.winfo_exists():
+            self._loading_toast.destroy()
+            self._loading_toast = None
+
+    def _on_translate_done(self, ai_reply):
+        self._dismiss_loading_toast()
+        self._translating = False
+        self._lock_translate_ui(False)
+        pyperclip.copy(ai_reply)
+        self.entry_var.set("")
+        self._show_toast(f"✅ 已复制到剪贴板：{ai_reply}")
+
+    def _on_translate_error(self, error_msg):
+        self._dismiss_loading_toast()
+        self._translating = False
+        self._lock_translate_ui(False)
+        messagebox.showerror("错误", f"调用AI接口出错:\n{error_msg}")
 
     def _show_toast(self, msg, duration=1500):
         toast = tk.Toplevel(self.root)
@@ -322,7 +379,6 @@ class Sidebar:
         lbl = tk.Label(toast, text=msg, font=("Microsoft YaHei", 11),
                        bg="#4a90d9", fg="white", padx=16, pady=8)
         lbl.pack()
-        # 居中显示在屏幕顶部
         toast.update_idletasks()
         tw = toast.winfo_width()
         sw = self.root.winfo_screenwidth()
@@ -351,7 +407,7 @@ class Sidebar:
             self.btn_frame, text="＋ 添加按钮", font=("Microsoft YaHei", 11),
             bg="#3c3c3c", fg="#aaa", activebackground="#505050",
             relief="flat", bd=0, cursor="hand2",
-            command=self._add_button_dialog,
+            command=self._on_add_button_click,
         ).pack(fill="x", padx=4, pady=(8, 4), ipady=8)
 
         # 设置按钮
@@ -359,7 +415,7 @@ class Sidebar:
             self.btn_frame, text="⚙ 设置", font=("Microsoft YaHei", 11),
             bg="#333", fg="#999", activebackground="#505050",
             relief="flat", bd=0, cursor="hand2",
-            command=self._settings_dialog,
+            command=self._on_settings_click,
         ).pack(fill="x", padx=4, pady=(4, 4), ipady=8)
 
     def _make_user_button(self, idx, item):
@@ -495,7 +551,7 @@ class Sidebar:
         self._confirm_delete(idx)
 
     def _do_user_print(self, text, files=None):
-        """粘贴文字（可选）+ 文件（可选）。files 为文件路径列表（无前缀）。"""
+        """粘贴文字（可选）+ 文件（可选）。files 为文件路径列表。"""
         if text:
             pyperclip.copy(text)
             pyautogui.hotkey("ctrl", "v")
@@ -510,7 +566,7 @@ class Sidebar:
         """
         将文件路径以 CF_HDROP 格式放入剪贴板，
         然后发送 Ctrl+V，效果等同于从文件管理器拖拽文件到目标窗口。
-        paths: 纯文件路径列表（无前缀）
+        paths: 纯文件路径列表
         """
         try:
             import win32clipboard
@@ -550,7 +606,7 @@ class Sidebar:
         except ImportError:
             pyperclip.copy("\n".join(paths))
             pyautogui.hotkey("ctrl", "v")
-            self._show_toast("⚠ 已复制文件路径，请手动粘贴文件，Windows可能需要自行安装 pywin32 库")
+            self._show_toast("⚠ 已复制文件路径，Windows可能需要自行安装 pywin32 库")
         except Exception as e:
             print(f"[文件粘贴失败] {e}")
             self._show_toast(f"⚠ 文件粘贴失败: {e}")
@@ -573,8 +629,19 @@ class Sidebar:
                 return i
         return -1
 
+    # --- 添加/设置按钮点击时自动收回侧边栏 ---
+    def _on_add_button_click(self):
+        self._set_collapsed()
+        self.root.after(100, self._add_button_dialog)
+
+    def _on_settings_click(self):
+        self._set_collapsed()
+        self.root.after(100, self._settings_dialog)
+
     # --- 添加自定义按钮 ---
     def _add_button_dialog(self):
+        self._dialog_open = True
+
         dlg = tk.Toplevel(self.root)
         dlg.title("添加按钮")
         dlg.geometry("420x560")
@@ -582,6 +649,12 @@ class Sidebar:
         dlg.attributes("-topmost", True)
         dlg.resizable(False, False)
         dlg.grab_set()
+
+        # 对话框关闭时重置标记
+        def _on_dialog_close():
+            self._dialog_open = False
+            dlg.destroy()
+        dlg.protocol("WM_DELETE_WINDOW", _on_dialog_close)
 
         # 拖入的文件路径（纯路径，无前缀）
         dropped_files = []
@@ -604,9 +677,9 @@ class Sidebar:
 
         # ── 已添加的条目列表 ──
         entries_frame = tk.Frame(dlg, bg="#2b2b2b")
-        entries_frame.pack(fill="both", padx=20, expand=True, pady=(0, 4))
+        entries_frame.pack(fill="both", padx=20, pady=(0, 4))
 
-        entries_canvas = tk.Canvas(entries_frame, bg="#2b2b2b", highlightthickness=0)
+        entries_canvas = tk.Canvas(entries_frame, bg="#2b2b2b", highlightthickness=0, height=150)
         entries_scrollbar = tk.Scrollbar(entries_frame, orient="vertical",
                                          command=entries_canvas.yview)
         entries_inner = tk.Frame(entries_canvas, bg="#2b2b2b")
@@ -621,6 +694,29 @@ class Sidebar:
                                 "entries_win", width=e.width))
         entries_canvas.pack(side="left", fill="both", expand=True)
         entries_scrollbar.pack(side="right", fill="y")
+
+        def _entries_mousewheel(event):
+            w = event.widget
+            while w is not None:
+                if w is txt_widget:
+                    return
+                if w is dlg:
+                    break
+                try:
+                    w = w.master
+                except Exception:
+                    break
+            if event.num == 4:
+                entries_canvas.yview_scroll(-3, "units")
+            elif event.num == 5:
+                entries_canvas.yview_scroll(3, "units")
+            else:
+                entries_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+
+        dlg.bind("<MouseWheel>", _entries_mousewheel)
+        dlg.bind("<Button-4>", _entries_mousewheel)
+        dlg.bind("<Button-5>", _entries_mousewheel)
 
         # 条目数据
         text_entries = []
@@ -708,6 +804,13 @@ class Sidebar:
         def _drop_files_remove(idx):
             dropped_files.pop(idx)
             _refresh_file_list()
+            count = len(dropped_files)
+            if count:
+                file_drop_label.configure(
+                    text=f"📎 已拖入 {count} 个文件（继续拖入可追加）")
+            else:
+                file_drop_label.configure(
+                    text="📎 拖入文件到此处（多个文件 = 一条记录，触发时全部文件一起随其一文字粘贴）")
 
         def _on_files_dropped(files):
             """windnd 回调：文件拖入"""
@@ -780,26 +883,26 @@ class Sidebar:
                     tc = len(self.buttons_data[existing_idx]["texts"])
                     fc = len(self.buttons_data[existing_idx]["files"])
                     self._show_toast(f"✅ 已合并到「{lbl}」（{tc}条文本, {fc}个文件）")
-                    dlg.destroy()
+                    _on_dialog_close()
                 elif choice == "create":
                     self.buttons_data.append({"label": lbl, "texts": texts, "files": files})
                     self.data["buttons"] = self.buttons_data
                     save_data(self.data)
                     self._rebuild_buttons()
-                    dlg.destroy()
+                    _on_dialog_close()
             else:
                 self.buttons_data.append({"label": lbl, "texts": texts, "files": files})
                 self.data["buttons"] = self.buttons_data
                 save_data(self.data)
                 self._rebuild_buttons()
-                dlg.destroy()
+                _on_dialog_close()
 
         tk.Button(bf, text="确认", font=("Microsoft YaHei", 10),
                   bg="#4a90d9", fg="white", relief="flat", width=8,
                   command=confirm).pack(side="left", padx=8)
         tk.Button(bf, text="取消", font=("Microsoft YaHei", 10),
                   bg="#555", fg="#ccc", relief="flat", width=8,
-                  command=dlg.destroy).pack(side="left", padx=8)
+                  command=_on_dialog_close).pack(side="left", padx=8)
 
         e1.focus_set()
 
@@ -1143,10 +1246,9 @@ class Sidebar:
 
     # --- 系统托盘 ---
     def _create_tray_image(self):
-        """生成一个简单的侧边栏托盘图标"""
+        """侧边栏托盘图标"""
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        # 侧边栏图标
         draw.rounded_rectangle([8, 8, 56, 56], radius=8, fill="#4a90d9")
         draw.rectangle([16, 16, 28, 48], fill="white")
         draw.rectangle([32, 16, 48, 28], fill="white")
