@@ -58,6 +58,7 @@ def _ensure_deps():
         except ImportError:
             missing.append(mod)
     if missing:
+        self._show_toast(f"⚠ 缺少 {missing} 模块，正在自动安装...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
 
 def _ensure_extra_deps():
@@ -539,7 +540,7 @@ class Sidebar:
         except ImportError:
             pyperclip.copy("\n".join(paths))
             pyautogui.hotkey("ctrl", "v")
-            self._show_toast("⚠ 已复制文件路径，请手动粘贴文件")
+            self._show_toast("⚠ 已复制文件路径，请手动粘贴文件，Windows可能需要自行安装 pywin32 库")
         except Exception as e:
             print(f"[文件粘贴失败] {e}")
             self._show_toast(f"⚠ 文件粘贴失败: {e}")
